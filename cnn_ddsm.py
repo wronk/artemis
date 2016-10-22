@@ -10,24 +10,34 @@ import os
 from os import path as op
 import tensorflow as tf
 import numpy as np
+from numpy.random import choice
 import cv2
 
 data_dir = '/media/Toshiba/Code/ddsm_data_preproc/'
 diagnosis_classes = ['normal', 'benign', 'cancer']
-n_base_classes = [2, 2, 2]
+diagnosis_batch_size = [20, 0, 20]  # Number of samples per batch
+diagnosis_label = [0., 0., 1.]  # y_label for each class
+
+n_base_classes = [2, 1, 2]
 #n_base_classes = [12, 14, 15]
+data_split_props = [0.6, 0.2, 0.2]  # Training, validation, test
 case_base_str = 'case'
 base_str_img = ['LEFT_CC.png', 'LEFT_MLO.png',
                 'RIGHT_CC.png', 'RIGHT_MLO.png']
-IMG_SIZE = (800, 400)
+IMG_SIZE = (800, 400)  # n_rows x n_cols
+
+assert sum(data_split_props) == 1., "Data proportions must add to 1."
+assert len(np.unique(diagnosis_label)) >= 2., "Need at least two data classes."
 
 diagnosis_data = {}
+diagnosis_label = {}
 for di, diag_class in enumerate(diagnosis_classes):
-    print 'Loading diagnosis class: ' + diag_class
+    print '\nLoading diagnosis class: ' + diag_class
     batch_folds = [diag_class + '_%02i' % batch_num
                    for batch_num in range(1, n_base_classes[di] + 1)]
 
     batch_data = []
+    batch_label = []
     for batch_fold in batch_folds:
         print '  Loading batch: ' + batch_fold
         # Get inidividual case directory names
@@ -37,6 +47,7 @@ for di, diag_class in enumerate(diagnosis_classes):
         case_list.sort()
 
         cases_arr = -1 * np.ones((len(case_list), 4, IMG_SIZE[0], IMG_SIZE[1]))
+        labels_arr = -1 * np.ones((len(case_list), 4))
 
         # Loop through each individual case
         for ci, case_fold in enumerate(case_list):
@@ -53,10 +64,48 @@ for di, diag_class in enumerate(diagnosis_classes):
                     img = cv2.flip(img, flipCode=1)
 
                 cases_arr[ci, img_i, :, :] = img
+                # TODO: FIX HACK, need to get label for each side
+                if 'cancer' in case_fold:
+                    labels_arr[ci, img_i] = 1.
+                else:
+                    labels_arr[ci, img_i] = 0.
 
-        batch_data.append(cases_arr)
 
-    diagnosis_data[diag_class] = batch_data
+        batch_data.extend(cases_arr)
+        batch_label.extend(labels_arr)
+
+    diagnosis_data[diag_class] = np.asarray(batch_data)
+    diagnosis_labels[diag_class] = np.asarray(batch_label)
+    import ipdb; ipdb.set_trace()
+
+####################################
+# Construct validation and test data
+####################################
+
+
+def split_data(data, splits):
+    """Helper to split large dataset into an arbitrary number of proportions"""
+    n_imgs = data.shape[0]
+    rand_inds = choice(range(n_imgs), size=n_imgs, replace=False)
+
+    data_arrs = []
+    split_inds = [int(sum(splits[0:ind]) * n_imgs) for ind in range(len(splits))]
+    split_inds.append(n_imgs)
+
+    for si in range(len(splits)):
+        start, stop = split_inds[si], split_inds[si + 1]
+        rand_slice = rand_inds[start:stop]
+
+        data_arrs.append(data[rand_slice])
+
+    return data_arrs
+
+
+train_data, valid_data, test_data = {}, {}, {}
+for diag_class in diagnosis_classes:
+    train_data[diag_class], valid_data[diag_class], test_data[diag_class] = \
+        split_data(diagnosis_data[diag_class], data_split_props)
+del diagnosis_data
 
 #####################
 # CNN helper funks
@@ -81,71 +130,135 @@ def max_pool(x, pool_size):
                           strides=[1, pool_size, pool_size, 1], padding='SAME')
 
 
-def create_ccn_model(layers_sizes, fullC_size, pool_size, filt_size, act_func, img_size):
+def create_ccn_model(layer_sizes, fullC_size, pool_size, filt_size, act_func,
+                     img_size, n_classes):
     W_list, b_list, h_list = [], [], []
 
-    x_train = tf.placeholder(tf.float32, shape=[None, img_size[0] * image_size[1]],
+    # Initialize input vars
+    x_train = tf.placeholder(tf.float32, shape=[None, img_size[0] * img_size[1]],
                              name='x_train')
-    x_image = tf.reshape(x_train, [-1, image_size[0], image_size[1], 1])
+    x_image = tf.reshape(x_train, [-1, img_size[0], img_size[1], 1])
 
-    for li, l_size in enumerate(layer_sizes[:-1]):
-        # Add convolutional layer
-        W_list.append(weight_variable([filt_size, filt_size, l_size,
-                                       l_size[li + 1]], name='W%i' % li))
-        b_list.append(bias_variable([l_size[li + 1]], name='b%i' % li))
+    # Add convolutional layers one by one
+    for li, (l_size1, l_size2) in enumerate(zip(layer_sizes[:-1], layer_sizes[1:])):
+        W_list.append(weight_variable([filt_size, filt_size, l_size1,
+                                       l_size2], name='W%i' % li))
+        b_list.append(bias_variable([l_size2], name='b%i' % li))
 
         if li == 0:
-            conv_temp = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
+            conv_temp = tf.nn.relu(conv2d(x_image, W_list[-1]) + b_list[-1])
         else:
             conv_temp = tf.nn.relu(conv2d(h_list[-1], W_list[-1]) + b_list[-1])
 
-        h_list.append(max_pool(conv_temp))
+        h_list.append(max_pool(conv_temp, pool_size))
 
     # First fully connected layer
     # Input: W_fc1 is image size x num_features
-    n_pool_layers = float(len(cnn_layer_sizes))
-    n_fc_vars = int(np.ceil(image_size[0] / pool_size ** n_pool_layers) *
-                    np.ceil(image_size[1] / pool_size ** n_pool_layers) *
-                    cnn_layer_sizes[-1])
+    n_pool_layers = float(len(layer_sizes) - 1)
+    last_h_shape = [dim.value for dim in h_list[-1].get_shape()[1:]]
+    n_fc_vars = int(np.prod(last_h_shape))
 
-    W_fc1 = weight_variable([n_fc_vars, fullC_layer_size], name='W_fc1')
-    b_fc1 = bias_variable([fullC_layer_size], name='b_fc1')
+    W_fc1 = weight_variable([n_fc_vars, fullC_size], name='W_fc1')
+    b_fc1 = bias_variable([fullC_size], name='b_fc1')
 
-    #h_pool2_flat = tf.reshape(h_pool4, [-1, n_fc_vars])
-    h_pool2_flat = tf.reshape(h_pool2, [-1, n_fc_vars])
-    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+    h_pool_last_flat = tf.reshape(h_list[-1], [-1, n_fc_vars])
+    h_fc1 = tf.nn.relu(tf.matmul(h_pool_last_flat, W_fc1) + b_fc1)
 
     # Apply dropout
     keep_prob = tf.placeholder(tf.float32)
     h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
-    # Second fully connected layer (includes output layer)
-    W_fc2 = weight_variable([fullC_layer_size, n_classes], name='W_fc2')
+    # Second fully connected layer (output layer)
+    W_fc2 = weight_variable([fullC_size, n_classes], name='W_fc2')
     b_fc2 = bias_variable([n_classes], name='b_fc2')
 
-    y_out = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
-    #y_out = tf.matmul(h_fc1, W_fc2) + b_fc2
+    y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
 
-    return x_train, y_out, keep_prob
+    return x_train, y_conv, keep_prob
 
+
+def get_batch(data):
+    """Helper to randomly return samples from dataset"""
+    batch_x, batch_y = [], []
+
+    for di, diag_class in enumerate(diagnosis_classes):
+        rand_inds = choice(range(data[diag_class].shape[0]),
+                           size=diagnosis_batch_size[di], replace=False)
+        batch_x.extend(data[diag_class][rand_inds])
+        batch_y.extend([diagnosis_label[di]] * diagnosis_batch_size[di])
+
+    return np.array(batch_x), np.array(batch_y)
 
 #####################
 # CNN model params
 #####################
 
-layers_size = [64, 64, 12]
+layers_sizes = [64, 64, 12]
 fullC_size = 32
 act_func = tf.nn.relu
 pool_size = 2
 filt_size = 2
 dropout_keep_p = 0.5
+n_classes = 2
 
 # Training params
 training_prop = 0.75
-batch_size = 30
 n_training_batches = 3000
 
+
+sess = tf.Session()
 ######################
 # Construct CNN
 ######################
-layers_size.insert(0, 1)  # Add for convenience
+layers_sizes.insert(0, 1)  # Add for convenience during construction
+
+x_train, y_conv, keep_prob = create_ccn_model(
+    layers_sizes, fullC_size, pool_size, filt_size, act_func, IMG_SIZE,
+    n_classes)
+y_labels = tf.placeholder(tf.int64, shape=[None], name='y_labels')
+
+
+# Add objective function and defining training scheme
+loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(y_conv,
+                                                                     y_labels))
+train_step = tf.train.AdamOptimizer(1e-3).minimize(loss)
+is_pred_correct = tf.equal(tf.arg_max(y_conv, 1), y_labels)
+accuracy = tf.reduce_mean(tf.cast(is_pred_correct, tf.float32))
+
+# Attach summaries
+tf.scalar_summary('loss', loss)
+tf.scalar_summary('accuracy', accuracy)
+merged_summaries = tf.merge_all_summaries()
+
+#saver = tf.train.Saver()  # create saver for saving network weights
+init = tf.initialize_all_variables()
+sess = tf.Session()
+
+train_writer = tf.train.SummaryWriter('./train_summaries', sess.graph)
+sess.run(init)
+
+######################
+# Train CNN
+######################
+
+for ti in range(n_training_batches):
+    # Get data for training step
+    batch_x, batch_y = get_batch(train_data)
+    feed_dict = {x_train: batch_x, y_labels: batch_y,
+                 keep_prob: dropout_keep_p}
+
+    _, obj, acc, summary = sess.run([train_step, loss, accuracy,
+                                     merged_summaries], feed_dict)
+    train_writer.add_summary(summary, ind)
+    print("\titer: %03d, cost: %.2f, acc: %.2f" % (ti, obj, acc))
+
+    # Sometimes compute validation accuracy
+    if ti % 5 == 0:
+        valid_acc = accuracy.eval(feed_dict={x_train: valid_x, y_labels:
+                                             valid_y, keep_prob: 1.0})
+        print 'Validation accuracy: %0.2f' % test_acc
+
+# Compute test data accuracy
+test_acc = accuracy.eval(feed_dict={x_train: test_x, y_labels: test_y,
+                                    keep_prob: 1.0})
+print 'Test accuracy: %0.2f' % test_acc
