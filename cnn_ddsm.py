@@ -18,7 +18,7 @@ data_dir = os.environ['DDSM_DATA']
 diagnosis_classes = ['normal', 'benign', 'cancer']
 diagnosis_batch_size = [20, 0, 20]  # Number of samples per batch
 
-n_base_classes = [2, 1, 2]
+n_base_classes = [1, 1, 1]
 #n_base_classes = [12, 14, 15]
 data_split_props = [0.6, 0.2, 0.2]  # Training, validation, test
 case_base_str = 'case'
@@ -217,25 +217,23 @@ n_classes = 2
 training_prop = 0.75
 n_training_batches = 3000
 
-
-sess = tf.Session()
 ######################
 # Construct CNN
 ######################
 layers_sizes.insert(0, 1)  # Add for convenience during construction
 
-x_train, y_conv, keep_prob = create_ccn_model(
-    layers_sizes, fullC_size, pool_size, filt_size, act_func, IMG_SIZE,
-    n_classes)
-y_labels = tf.placeholder(tf.int64, shape=[None], name='y_labels')
+with tf.device('/gpu:0'):
+    x_train, y_conv, keep_prob = create_ccn_model(
+        layers_sizes, fullC_size, pool_size, filt_size, act_func, IMG_SIZE,
+        n_classes)
+    y_labels = tf.placeholder(tf.int64, shape=[None], name='y_labels')
 
-
-# Add objective function and defining training scheme
-loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(y_conv,
-                                                                     y_labels))
-train_step = tf.train.AdamOptimizer(1e-3).minimize(loss)
-is_pred_correct = tf.equal(tf.arg_max(y_conv, 1), y_labels)
-accuracy = tf.reduce_mean(tf.cast(is_pred_correct, tf.float32))
+    # Add objective function and defining training scheme
+    loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+        y_conv, y_labels))
+    train_step = tf.train.AdamOptimizer(1e-3).minimize(loss)
+    is_pred_correct = tf.equal(tf.arg_max(y_conv, 1), y_labels)
+    accuracy = tf.reduce_mean(tf.cast(is_pred_correct, tf.float32))
 
 # Attach summaries
 tf.scalar_summary('loss', loss)
@@ -244,7 +242,7 @@ merged_summaries = tf.merge_all_summaries()
 
 #saver = tf.train.Saver()  # create saver for saving network weights
 init = tf.initialize_all_variables()
-sess = tf.Session()
+sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 
 train_writer = tf.train.SummaryWriter('./train_summaries', sess.graph)
 sess.run(init)
@@ -274,3 +272,4 @@ for ti in range(n_training_batches):
 test_acc = accuracy.eval(feed_dict={x_train: test_x, y_labels: test_y,
                                     keep_prob: 1.0})
 print 'Test accuracy: %0.2f' % test_acc
+sess.close()
