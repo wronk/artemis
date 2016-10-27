@@ -14,7 +14,7 @@ from numpy.random import choice
 import cv2
 import json
 
-data_dir = '/media/Toshiba/Code/ddsm_data_preproc/'
+data_dir = os.environ['DDSM_DATA']
 diagnosis_classes = ['normal', 'benign', 'cancer']
 diagnosis_batch_size = [20, 0, 20]  # Number of samples per batch
 
@@ -71,9 +71,6 @@ for di, diag_class in enumerate(diagnosis_classes):
 
                 img_base_view = img_fname.split('.')[-2]
                 img_4_index = base_views.index(img_base_view)
-
-                if 'RIGHT' in img_base_view:
-                    img = cv2.flip(img, flipCode=1)
 
                 # Load and store labels
                 # TODO: Check ordering of images/labels
