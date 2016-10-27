@@ -12,11 +12,11 @@ import tensorflow as tf
 import numpy as np
 from numpy.random import choice
 import cv2
+import json
 
 data_dir = '/media/Toshiba/Code/ddsm_data_preproc/'
 diagnosis_classes = ['normal', 'benign', 'cancer']
 diagnosis_batch_size = [20, 0, 20]  # Number of samples per batch
-diagnosis_label = [0., 0., 1.]  # y_label for each class
 
 n_base_classes = [2, 1, 2]
 #n_base_classes = [12, 14, 15]
@@ -27,10 +27,14 @@ base_str_img = ['LEFT_CC.png', 'LEFT_MLO.png',
 IMG_SIZE = (800, 400)  # n_rows x n_cols
 
 assert sum(data_split_props) == 1., "Data proportions must add to 1."
-assert len(np.unique(diagnosis_label)) >= 2., "Need at least two data classes."
+
+# Load image labels (y/n malignant)
+with open(op.join(data_dir, 'pathology_labels.json')) as json_file:
+    loaded_diag_dict = json.load(json_file)
+base_views = [name + '_preproc' for name in loaded_diag_dict['base_views']]
 
 diagnosis_data = {}
-diagnosis_label = {}
+diagnosis_labels = {}
 for di, diag_class in enumerate(diagnosis_classes):
     print '\nLoading diagnosis class: ' + diag_class
     batch_folds = [diag_class + '_%02i' % batch_num
@@ -51,32 +55,36 @@ for di, diag_class in enumerate(diagnosis_classes):
 
         # Loop through each individual case
         for ci, case_fold in enumerate(case_list):
+            if case_fold in loaded_diag_dict['skip_cases']:
+                print 'Skipping case %s' % case_fold
+                continue
+
             img_dir = op.join(batch_dir, case_fold)
             img_list = [temp_img_fname for temp_img_fname in os.listdir(img_dir)
                         if '.png' in temp_img_fname]
+            case_labels = loaded_diag_dict[diag_class][batch_fold][case_fold]
 
-            # Load and store each image
             for img_i, img_fname in enumerate(img_list):
+                # Load and store each image
                 img_fpath = op.join(img_dir, img_fname)
                 img = cv2.imread(img_fpath, 0)
 
-                if 'RIGHT' in img_fname:
+                img_base_view = img_fname.split('.')[-2]
+                img_4_index = base_views.index(img_base_view)
+
+                if 'RIGHT' in img_base_view:
                     img = cv2.flip(img, flipCode=1)
 
+                # Load and store labels
+                # TODO: Check ordering of images/labels
                 cases_arr[ci, img_i, :, :] = img
-                # TODO: FIX HACK, need to get label for each side
-                if 'cancer' in case_fold:
-                    labels_arr[ci, img_i] = 1.
-                else:
-                    labels_arr[ci, img_i] = 0.
-
+                labels_arr[ci, img_4_index] = int(case_labels[img_4_index])
 
         batch_data.extend(cases_arr)
         batch_label.extend(labels_arr)
 
     diagnosis_data[diag_class] = np.asarray(batch_data)
     diagnosis_labels[diag_class] = np.asarray(batch_label)
-    import ipdb; ipdb.set_trace()
 
 ####################################
 # Construct validation and test data
@@ -135,9 +143,10 @@ def create_ccn_model(layer_sizes, fullC_size, pool_size, filt_size, act_func,
     W_list, b_list, h_list = [], [], []
 
     # Initialize input vars
-    x_train = tf.placeholder(tf.float32, shape=[None, img_size[0] * img_size[1]],
-                             name='x_train')
-    x_image = tf.reshape(x_train, [-1, img_size[0], img_size[1], 1])
+    #x_train = tf.placeholder(tf.float32, shape=[None, img_size[0] * img_size[1]],
+    #                         name='x_train')
+    #x_image = tf.reshape(x_train, [-1, img_size[0], img_size[1], 1])
+    x_image = tf.placeholder(tf.float32, shape=[None, img_size[0], img_size[1], 1])
 
     # Add convolutional layers one by one
     for li, (l_size1, l_size2) in enumerate(zip(layer_sizes[:-1], layer_sizes[1:])):
@@ -174,20 +183,26 @@ def create_ccn_model(layer_sizes, fullC_size, pool_size, filt_size, act_func,
 
     y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
 
-    return x_train, y_conv, keep_prob
+    #return x_train, y_conv, keep_prob
+    return x_image, y_conv, keep_prob
 
 
 def get_batch(data):
     """Helper to randomly return samples from dataset"""
     batch_x, batch_y = [], []
 
+    # Get a designated number of samples from each diagnosis class
     for di, diag_class in enumerate(diagnosis_classes):
         rand_inds = choice(range(data[diag_class].shape[0]),
                            size=diagnosis_batch_size[di], replace=False)
         batch_x.extend(data[diag_class][rand_inds])
-        batch_y.extend([diagnosis_label[di]] * diagnosis_batch_size[di])
+        batch_y.extend(diagnosis_labels[diag_class][rand_inds])
 
-    return np.array(batch_x), np.array(batch_y)
+    # Reshape for feeding tensorflow. Each row is now an observation
+    batch_x_arr = np.array(batch_x).reshape(-1, IMG_SIZE[0], IMG_SIZE[1], 1)
+    batch_y_arr = np.array(batch_y).reshape(-1)
+
+    return batch_x_arr, batch_y_arr
 
 #####################
 # CNN model params

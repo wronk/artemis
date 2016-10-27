@@ -25,15 +25,15 @@ n_base_classes = [12, 2, 14, 15]
 case_base_str = 'case'
 base_str_img = ['LEFT_CC.png', 'LEFT_MLO.png',
                 'RIGHT_CC.png', 'RIGHT_MLO.png']
-base_img_view = ['LEFT_CC', 'LEFT_MLO', 'RIGHT_CC', 'RIGHT_MLO']
+base_views = ['LEFT_CC', 'LEFT_MLO', 'RIGHT_CC', 'RIGHT_MLO']
 new_img_size = (400, 800)
 
-pathology_dict = {}
 
 skip_cases = ['case3102']
 do_flip_images = False
 do_get_pathology = True
 
+pathology_dict = dict(base_views=base_views, skip_cases=skip_cases)
 
 def check_dir(path):
     if not op.isdir(path):
@@ -120,7 +120,7 @@ for class_fold, n_base_class in zip(base_str_classes, n_base_classes):
                 for overlay in overlay_list:
                     temp_pathology = check_for_abnormality(case_dir, overlay)
 
-                    ind = base_img_view.index(overlay.split('.')[1])
+                    ind = base_views.index(overlay.split('.')[1])
                     path_4[ind] = temp_pathology
                 if 'cancer' in batch_fold and not any(path_4):
                     raise RuntimeError('Cancer folder, but no malignancy')
