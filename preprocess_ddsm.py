@@ -30,10 +30,11 @@ new_img_size = (400, 800)
 
 
 skip_cases = ['case3102']
-do_flip_images = False
+do_flip_images = True
 do_get_pathology = True
 
 pathology_dict = dict(base_views=base_views, skip_cases=skip_cases)
+
 
 def check_dir(path):
     if not op.isdir(path):
@@ -92,8 +93,8 @@ for class_fold, n_base_class in zip(base_str_classes, n_base_classes):
 
             if do_flip_images:
                 # Load and resize each image
-                for filepath_img in img_list:
-                    filepath_img = op.join(case_dir, 'PNGFiles', filepath_img)
+                for file_name in img_list:
+                    filepath_img = op.join(case_dir, 'PNGFiles', file_name)
                     img = cv2.imread(filepath_img, 0)
                     img_resized = cv2.resize(img, new_img_size,
                                              interpolation=cv2.INTER_AREA)
@@ -101,6 +102,10 @@ for class_fold, n_base_class in zip(base_str_classes, n_base_classes):
                     img_file_name, ext = op.splitext(op.basename(filepath_img))
                     fname_save = op.join(save_dir, batch_fold, case,
                                          img_file_name + '_preproc' + ext)
+
+                    # Flip so all images are symmetric
+                    if 'RIGHT' in img_file_name:
+                        img_resized = cv2.flip(img_resized, flipCode=1)
 
                     if save_data:
                         cv2.imwrite(fname_save, img_resized)
