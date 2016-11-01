@@ -16,11 +16,12 @@ import json
 
 data_dir = os.environ['DDSM_DATA']
 diagnosis_classes = ['normal', 'benign', 'cancer']
-diagnosis_batch_size = [20, 0, 20]  # Number of samples per batch
+train_batch_sizes = [3, 3, 3]  # Training batch sizes
+valid_batch_sizes = [5, 5, 5]  # Validation batch sizes
 
-n_base_classes = [1, 1, 1]
+n_base_classes = [2, 2, 2]
 #n_base_classes = [12, 14, 15]
-data_split_props = [0.6, 0.2, 0.2]  # Training, validation, test
+data_split_props = [0.8, 0.0, 0.2]  # Training, validation, test
 case_base_str = 'case'
 base_str_img = ['LEFT_CC.png', 'LEFT_MLO.png',
                 'RIGHT_CC.png', 'RIGHT_MLO.png']
@@ -184,14 +185,16 @@ def create_ccn_model(layer_sizes, fullC_size, pool_size, filt_size, act_func,
     return x_image, y_conv, keep_prob
 
 
-def get_batch(data):
+def get_batch(data, batch_sizes):
     """Helper to randomly return samples from dataset"""
     batch_x, batch_y = [], []
 
     # Get a designated number of samples from each diagnosis class
+    # TODO: might need to equalize images since each cancer case usually only
+    # has one breast with cancer and one w/out
     for di, diag_class in enumerate(diagnosis_classes):
         rand_inds = choice(range(data[diag_class].shape[0]),
-                           size=diagnosis_batch_size[di], replace=False)
+                           size=batch_sizes[di], replace=False)
         batch_x.extend(data[diag_class][rand_inds])
         batch_y.extend(diagnosis_labels[diag_class][rand_inds])
 
@@ -201,11 +204,12 @@ def get_batch(data):
 
     return batch_x_arr, batch_y_arr
 
+
 #####################
 # CNN model params
 #####################
 
-layers_sizes = [64, 64, 12]
+layers_sizes = [32, 32, 16]
 fullC_size = 32
 act_func = tf.nn.relu
 pool_size = 2
@@ -214,7 +218,6 @@ dropout_keep_p = 0.5
 n_classes = 2
 
 # Training params
-training_prop = 0.75
 n_training_batches = 3000
 
 ######################
@@ -222,18 +225,17 @@ n_training_batches = 3000
 ######################
 layers_sizes.insert(0, 1)  # Add for convenience during construction
 
-with tf.device('/gpu:0'):
-    x_train, y_conv, keep_prob = create_ccn_model(
-        layers_sizes, fullC_size, pool_size, filt_size, act_func, IMG_SIZE,
-        n_classes)
-    y_labels = tf.placeholder(tf.int64, shape=[None], name='y_labels')
+x_train, y_conv, keep_prob = create_ccn_model(
+    layers_sizes, fullC_size, pool_size, filt_size, act_func, IMG_SIZE,
+    n_classes)
+y_labels = tf.placeholder(tf.int64, shape=[None], name='y_labels')
 
-    # Add objective function and defining training scheme
-    loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-        y_conv, y_labels))
-    train_step = tf.train.AdamOptimizer(1e-3).minimize(loss)
-    is_pred_correct = tf.equal(tf.arg_max(y_conv, 1), y_labels)
-    accuracy = tf.reduce_mean(tf.cast(is_pred_correct, tf.float32))
+# Add objective function and defining training scheme
+loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+    y_conv, y_labels))
+train_step = tf.train.AdamOptimizer(1e-3).minimize(loss)
+is_pred_correct = tf.equal(tf.arg_max(y_conv, 1), y_labels)
+accuracy = tf.reduce_mean(tf.cast(is_pred_correct, tf.float32))
 
 # Attach summaries
 tf.scalar_summary('loss', loss)
@@ -242,7 +244,8 @@ merged_summaries = tf.merge_all_summaries()
 
 #saver = tf.train.Saver()  # create saver for saving network weights
 init = tf.initialize_all_variables()
-sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
+#sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
+sess = tf.Session()
 
 train_writer = tf.train.SummaryWriter('./train_summaries', sess.graph)
 sess.run(init)
@@ -253,23 +256,28 @@ sess.run(init)
 
 for ti in range(n_training_batches):
     # Get data for training step
-    batch_x, batch_y = get_batch(train_data)
+    batch_x, batch_y = get_batch(train_data, train_batch_sizes)
     feed_dict = {x_train: batch_x, y_labels: batch_y,
                  keep_prob: dropout_keep_p}
 
     _, obj, acc, summary = sess.run([train_step, loss, accuracy,
                                      merged_summaries], feed_dict)
-    train_writer.add_summary(summary, ind)
+    train_writer.add_summary(summary, ti)
     print("\titer: %03d, cost: %.2f, acc: %.2f" % (ti, obj, acc))
 
     # Sometimes compute validation accuracy
     if ti % 5 == 0:
+
+        # XXX HACK: for now, use only test data
+        valid_x, valid_y = get_batch(test_data, valid_batch_sizes)
         valid_acc = accuracy.eval(feed_dict={x_train: valid_x, y_labels:
-                                             valid_y, keep_prob: 1.0})
-        print 'Validation accuracy: %0.2f' % test_acc
+                                             valid_y, keep_prob: 1.0},
+                                  session=sess)
+        print 'Validation accuracy: %0.2f' % valid_acc
 
 # Compute test data accuracy
-test_acc = accuracy.eval(feed_dict={x_train: test_x, y_labels: test_y,
-                                    keep_prob: 1.0})
-print 'Test accuracy: %0.2f' % test_acc
+#test_acc = accuracy.eval(feed_dict={x_train: test_x, y_labels: test_y,
+#                                    keep_prob: 1.0},
+#                         session=sess)
+#print 'Test accuracy: %0.2f' % test_acc
 sess.close()
