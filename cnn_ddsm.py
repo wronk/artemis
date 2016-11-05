@@ -17,10 +17,10 @@ import json
 data_dir = os.environ['DDSM_DATA']
 diagnosis_classes = ['normal', 'benign', 'cancer']
 train_batch_sizes = [3, 3, 3]  # Training batch sizes
-valid_batch_sizes = [5, 5, 5]  # Validation batch sizes
+valid_batch_sizes = [10, 10, 10]  # Validation batch sizes
 
-n_base_classes = [2, 2, 2]
-#n_base_classes = [12, 14, 15]
+#n_base_classes = [3, 3, 3]
+n_base_classes = [12, 14, 15]
 data_split_props = [0.8, 0.0, 0.2]  # Training, validation, test
 case_base_str = 'case'
 base_str_img = ['LEFT_CC.png', 'LEFT_MLO.png',
@@ -106,6 +106,10 @@ def split_data(data, splits):
 
     return data_arrs
 
+print '\nTraining batch sizes: %s, Testing batch sizes: %s' % (
+    train_batch_sizes, valid_batch_sizes)
+print 'Data split proportions (train, valid, test): %s' % str(data_split_props)
+print 'Image size: %s' % str(IMG_SIZE)
 
 train_data, valid_data, test_data = {}, {}, {}
 for diag_class in diagnosis_classes:
@@ -209,16 +213,16 @@ def get_batch(data, batch_sizes):
 # CNN model params
 #####################
 
-layers_sizes = [32, 32, 16]
-fullC_size = 32
+layers_sizes = [32, 32, 16, 16]
+fullC_size = 512
 act_func = tf.nn.relu
-pool_size = 2
-filt_size = 2
+pool_size = 3
+filt_size = 3
 dropout_keep_p = 0.5
 n_classes = 2
 
 # Training params
-n_training_batches = 3000
+n_training_batches = 20000
 
 ######################
 # Construct CNN
@@ -233,7 +237,7 @@ y_labels = tf.placeholder(tf.int64, shape=[None], name='y_labels')
 # Add objective function and defining training scheme
 loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
     y_conv, y_labels))
-train_step = tf.train.AdamOptimizer(1e-3).minimize(loss)
+train_step = tf.train.AdamOptimizer(1e-2).minimize(loss)
 is_pred_correct = tf.equal(tf.arg_max(y_conv, 1), y_labels)
 accuracy = tf.reduce_mean(tf.cast(is_pred_correct, tf.float32))
 
@@ -244,7 +248,6 @@ merged_summaries = tf.merge_all_summaries()
 
 #saver = tf.train.Saver()  # create saver for saving network weights
 init = tf.initialize_all_variables()
-#sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 sess = tf.Session()
 
 train_writer = tf.train.SummaryWriter('./train_summaries', sess.graph)
@@ -273,7 +276,9 @@ for ti in range(n_training_batches):
         valid_acc = accuracy.eval(feed_dict={x_train: valid_x, y_labels:
                                              valid_y, keep_prob: 1.0},
                                   session=sess)
-        print 'Validation accuracy: %0.2f' % valid_acc
+        chance_acc = 1. - np.mean(valid_y)
+        print 'Validation accuracy: %0.2f, Relative change: %0.2f' % (
+            valid_acc, valid_acc - chance_acc)
 
 # Compute test data accuracy
 #test_acc = accuracy.eval(feed_dict={x_train: test_x, y_labels: test_y,
